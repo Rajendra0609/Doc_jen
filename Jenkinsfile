@@ -69,25 +69,34 @@ pipeline {
         }
         stage('Trivy Scan') {
     steps {
-     catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-        script {
-            sh 'mkdir -p artifacts/trivy'
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+            script {
+                sh 'mkdir -p artifacts/trivy'
 
-            sh """
-                trivy image --scanners vuln \\
-                    --severity HIGH,CRITICAL \\
-                    --format template \\
-                    --template "@contrib/html.tpl" \\
-                    --timeout 30m \\
-                    --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
-            """
+                // Download the HTML template
+                sh '''
+                    curl -sSfL -o artifacts/trivy/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+                '''
+
+                // Run the scan using the downloaded template
+                sh """
+                    trivy image --scanners vuln \\
+                        --severity HIGH,CRITICAL \\
+                        --format template \\
+                        --template "@artifacts/trivy/html.tpl" \\
+                        --timeout 30m \\
+                        --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
+                """
+            }
         }
-     }
     }
 }
+
         stage('Archive Trivy Report') {
             steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                 archiveArtifacts artifacts: 'artifacts/trivy/report.html', allowEmptyArchive: true
+             }
             }
         }
         stage('Push Image to DockerHub') {
