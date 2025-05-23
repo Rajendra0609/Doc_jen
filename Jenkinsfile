@@ -147,36 +147,41 @@ pipeline {
             }
         }
         stage('Create Merge Request') {
-            steps {
-                script {
-                    def prInputs = input message: 'Provide details for the merge request',
-                        parameters: [
-                            string(name: 'PR_TITLE', description: 'Merge request title'),
-                            text(name: 'PR_BODY', description: 'Merge request description')
-                        ]
+    steps {
+        script {
+            def prInputs = input message: 'Provide details for the merge request',
+                parameters: [
+                    string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                    string(name: 'PR_TITLE', description: 'Merge request title'),
+                    text(name: 'PR_BODY', description: 'Merge request description')
+                ]
 
-                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                        def jsonPayload = """{
-                            "title": "${prInputs['PR_TITLE']}",
-                            "head": "${params.BRANCH_NAME}",
-                            "base": "master",
-                            "body": "${prInputs['PR_BODY']}"
-                        }"""
+            if (prInputs['SOURCE_BRANCH'] == 'master') {
+                error("PR source and target cannot both be 'master'. Please choose a different source branch.")
+            }
 
-                        writeFile file: 'pr_payload.json', text: jsonPayload
+            def jsonPayload = """{
+                "title": "${prInputs['PR_TITLE']}",
+                "head": "${prInputs['SOURCE_BRANCH']}",
+                "base": "master",
+                "body": "${prInputs['PR_BODY']}"
+            }"""
 
-                        sh """
-                            curl -X POST \
-                                 -H "Authorization: token ${GITHUB_TOKEN}" \
-                                 -H "Accept: application/vnd.github.v3+json" \
-                                 -d @pr_payload.json \
-                                 ${GITHUB_API_URL}/repos/${GITHUB_REPO}/pulls
-                        """
-                    }
-                }
+            writeFile file: 'pr_payload.json', text: jsonPayload
+
+            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                sh '''
+                    curl -X POST \
+                        -H "Authorization: token $GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github.v3+json" \
+                        -d @pr_payload.json \
+                        $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                '''
             }
         }
     }
+}
+
     post {
         success {
             //slackSend channel: "${env.SLACK_CHANNEL}", color: 'good', message: "Build #${env.BUILD_NUMBER} succeeded for branch ${params.BRANCH_NAME} and environment ${params.DEPLOY_ENV}"
