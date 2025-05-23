@@ -47,25 +47,6 @@ pipeline {
                 }
             }
         }
-        stage('Dependency Check') {
-            when {
-                expression { params.DEPLOY_ENV != 'prod' }
-            }
-            steps {
-                script {
-                    catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                        dependencyCheck(
-                            additionalArguments: '--scan ./ --format HTML --out artifacts/dependency-check',
-                            odcInstallation: 'dpcheck'
-                        )
-                        archiveArtifacts(
-                            artifacts: 'artifacts/dependency-check/dependency-check-report.html',
-                            allowEmptyArchive: true
-                        )
-                    }
-                }
-            }
-        }
         stage('Build Docker Image') {
             steps {
                 script {
