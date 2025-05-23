@@ -68,20 +68,21 @@ pipeline {
             }
         }
         stage('Trivy Scan') {
-            steps {
-                script {
-                    sh 'mkdir -p artifacts/trivy'
+    steps {
+        script {
+            sh 'mkdir -p artifacts/trivy'
 
-                    // Run Trivy and generate HTML report
-                    sh """
-                        trivy image --severity HIGH,CRITICAL \\
-                            --format template \\
-                            --template "@contrib/html.tpl" \\
-                            --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
-                    """
-                }
-            }
+            sh """
+                trivy image --scanners vuln \\
+                    --severity HIGH,CRITICAL \\
+                    --format template \\
+                    --template "@contrib/html.tpl" \\
+                    --timeout 30m \\
+                    --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
+            """
         }
+    }
+}
         stage('Archive Trivy Report') {
             steps {
                 archiveArtifacts artifacts: 'artifacts/trivy/report.html', allowEmptyArchive: true
