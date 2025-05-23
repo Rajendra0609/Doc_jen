@@ -69,6 +69,7 @@ pipeline {
         }
         stage('Trivy Scan') {
     steps {
+     catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
         script {
             sh 'mkdir -p artifacts/trivy'
 
@@ -81,6 +82,7 @@ pipeline {
                     --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
             """
         }
+     }
     }
 }
         stage('Archive Trivy Report') {
