@@ -5,14 +5,17 @@ pipeline {
             defaultContainer 'jnlp'
         }
     }
+
     tools {
         nodejs 'nodejs'
     }
+
     parameters {
         string(name: 'BRANCH_NAME', defaultValue: 'master', description: 'Git branch to build')
         choice(name: 'DEPLOY_ENV', choices: ['test', 'prod'], description: 'Deployment environment')
         string(name: 'DOCKER_HUB_REPO', defaultValue: 'daggu1997/jenkins', description: 'Enter the Docker Hub image name (e.g., daggu1997/kubejenkins)')
     }
+
     environment {
         DOCKER_HUB_CREDENTIALS_ID = 'docker'
         DEP_CHECK_PROJECT = "${env.JOB_NAME}"
@@ -23,6 +26,7 @@ pipeline {
         SLACK_CHANNEL = '#build-notifications'
         SLACK_CREDENTIALS_ID = 'slack-token'
     }
+
     options {
         timeout(time: 90, unit: 'MINUTES')
         timestamps()
@@ -30,6 +34,7 @@ pipeline {
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
     }
+
     stages {
         stage('Lynis Security Scan') {
             steps {
@@ -47,65 +52,65 @@ pipeline {
                 }
             }
         }
+
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Ask for Dockerfile name at runtime (optional)
                     def dockerfileName = input(
                         id: 'userInput', message: 'Enter Dockerfile name (leave blank for default)', parameters: [
                             string(defaultValue: '', description: 'Dockerfile name (e.g., Dockerfile.custom)', name: 'DOCKERFILE_NAME')
                         ]
                     )
 
-                    // Use provided file or default to 'Dockerfile'
                     dockerfileName = dockerfileName?.trim() ? dockerfileName : 'Dockerfile'
 
                     echo "Building Docker image using file: ${dockerfileName}"
-                    
-                    // Build Docker image with custom Dockerfile
-                    dockerImage = docker.build("${DOCKER_HUB_REPO}:latest", "-f ${dockerfileName} .")
+
+                    dockerImage = docker.build("${params.DOCKER_HUB_REPO}:latest", "-f ${dockerfileName} .")
                 }
             }
         }
+
         stage('Trivy Scan') {
-    steps {
-        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-            script {
-                sh 'mkdir -p artifacts/trivy'
+            steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                    script {
+                        sh 'mkdir -p artifacts/trivy'
 
-                // Download the HTML template
-                sh '''
-                    curl -sSfL -o artifacts/trivy/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
-                '''
+                        sh '''
+                            curl -sSfL -o artifacts/trivy/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
+                        '''
 
-                // Run the scan using the downloaded template
-                sh """
-                    trivy image --scanners vuln \\
-                        --severity HIGH,CRITICAL \\
-                        --format template \\
-                        --template "@artifacts/trivy/html.tpl" \\
-                        --timeout 30m \\
-                        --output artifacts/trivy/report.html ${DOCKER_HUB_REPO}:latest
-                """
+                        sh """
+                            trivy image --scanners vuln \
+                                --severity HIGH,CRITICAL \
+                                --format template \
+                                --template "@artifacts/trivy/html.tpl" \
+                                --timeout 30m \
+                                --output artifacts/trivy/report.html ${params.DOCKER_HUB_REPO}:latest
+                        """
+                    }
+                }
             }
         }
-    }
-}
 
         stage('Archive Trivy Report') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                archiveArtifacts artifacts: 'artifacts/trivy/report.html', allowEmptyArchive: true
-             }
+                    archiveArtifacts artifacts: 'artifacts/trivy/report.html', allowEmptyArchive: true
+                }
             }
         }
+
         stage('Push Image to DockerHub') {
             when {
                 expression { params.DEPLOY_ENV != 'prod' }
             }
             steps {
                 script {
-                    def tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')]
+                    def tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [
+                        string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')
+                    ]
                     def tags = tagsInput.tokenize(',').collect { it.trim() }
                     echo "Pushing image with tags: ${tags}"
                     docker.withRegistry('https://registry.hub.docker.com', "${DOCKER_HUB_CREDENTIALS_ID}") {
@@ -117,6 +122,7 @@ pipeline {
                 }
             }
         }
+
         stage('Approval for Deployment') {
             when {
                 anyOf {
@@ -128,6 +134,7 @@ pipeline {
                 input message: "Approve deployment to ${params.DEPLOY_ENV} environment?"
             }
         }
+
         stage('Create Git Tag') {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
@@ -146,53 +153,52 @@ pipeline {
                 }
             }
         }
+
         stage('Create Merge Request') {
-    steps {
-        script {
-            def prInputs = input message: 'Provide details for the merge request',
-                parameters: [
-                    string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
-                    string(name: 'PR_TITLE', description: 'Merge request title'),
-                    text(name: 'PR_BODY', description: 'Merge request description')
-                ]
+            steps {
+                script {
+                    def prInputs = input message: 'Provide details for the merge request',
+                        parameters: [
+                            string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                            string(name: 'PR_TITLE', description: 'Merge request title'),
+                            text(name: 'PR_BODY', description: 'Merge request description')
+                        ]
 
-            if (prInputs['SOURCE_BRANCH'] == 'master') {
-                error("PR source and target cannot both be 'master'. Please choose a different source branch.")
-            }
+                    if (prInputs['SOURCE_BRANCH'] == 'master') {
+                        error("PR source and target cannot both be 'master'. Please choose a different source branch.")
+                    }
 
-            def jsonPayload = """{
-                "title": "${prInputs['PR_TITLE']}",
-                "head": "${prInputs['SOURCE_BRANCH']}",
-                "base": "master",
-                "body": "${prInputs['PR_BODY']}"
-            }"""
+                    def jsonPayload = """{
+                        "title": "${prInputs['PR_TITLE']}",
+                        "head": "${prInputs['SOURCE_BRANCH']}",
+                        "base": "master",
+                        "body": "${prInputs['PR_BODY']}"
+                    }"""
 
-            writeFile file: 'pr_payload.json', text: jsonPayload
+                    writeFile file: 'pr_payload.json', text: jsonPayload
 
-            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                sh '''
-                    curl -X POST \
-                        -H "Authorization: token $GITHUB_TOKEN" \
-                        -H "Accept: application/vnd.github.v3+json" \
-                        -d @pr_payload.json \
-                        $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
-                '''
+                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                        sh '''
+                            curl -X POST \
+                                -H "Authorization: token $GITHUB_TOKEN" \
+                                -H "Accept: application/vnd.github.v3+json" \
+                                -d @pr_payload.json \
+                                $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                        '''
+                    }
+                }
             }
         }
     }
-}
 
     post {
         success {
-            //slackSend channel: "${env.SLACK_CHANNEL}", color: 'good', message: "Build #${env.BUILD_NUMBER} succeeded for branch ${params.BRANCH_NAME} and environment ${params.DEPLOY_ENV}"
             echo 'Build & Deploy completed successfully!'
         }
         failure {
-            //slackSend channel: "${env.SLACK_CHANNEL}", color: 'danger', message: "Build #${env.BUILD_NUMBER} failed for branch ${params.BRANCH_NAME} and environment ${params.DEPLOY_ENV}"
             echo 'Build & Deploy failed. Check logs.'
         }
         unstable {
-            //slackSend channel: "${env.SLACK_CHANNEL}", color: 'warning', message: "Build #${env.BUILD_NUMBER} is unstable for branch ${params.BRANCH_NAME} and environment ${params.DEPLOY_ENV}"
             echo 'Build & Deploy is unstable. Check logs.'
         }
         always {
@@ -201,4 +207,3 @@ pipeline {
         }
     }
 }
-
