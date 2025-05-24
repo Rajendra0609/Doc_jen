@@ -156,11 +156,16 @@ pipeline {
                 }
             }
         }
-
         stage('Create Merge Request') {
     when {
-        not {
-            branch 'master'
+        allOf {
+            not {
+                branch 'master'
+            }
+            expression {
+                // Only run if this is not a PR-triggered build
+                return !env.CHANGE_ID
+            }
         }
     }
     steps {
@@ -197,8 +202,6 @@ pipeline {
         }
     }
 }
-
-
     post {
         success {
             echo 'Build & Deploy completed successfully!'
