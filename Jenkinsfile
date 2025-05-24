@@ -136,6 +136,9 @@ pipeline {
         }
 
         stage('Create Git Tag') {
+           when {
+                branch 'master'
+            }
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     script {
@@ -155,41 +158,46 @@ pipeline {
         }
 
         stage('Create Merge Request') {
-            steps {
-                script {
-                    def prInputs = input message: 'Provide details for the merge request',
-                        parameters: [
-                            string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
-                            string(name: 'PR_TITLE', description: 'Merge request title'),
-                            text(name: 'PR_BODY', description: 'Merge request description')
-                        ]
+    when {
+        not {
+            branch 'master'
+        }
+    }
+    steps {
+        script {
+            def prInputs = input message: 'Provide details for the merge request',
+                parameters: [
+                    string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                    string(name: 'PR_TITLE', description: 'Merge request title'),
+                    text(name: 'PR_BODY', description: 'Merge request description')
+                ]
 
-                    if (prInputs['SOURCE_BRANCH'] == 'master') {
-                        error("PR source and target cannot both be 'master'. Please choose a different source branch.")
-                    }
+            if (prInputs['SOURCE_BRANCH'] == 'master') {
+                error("PR source and target cannot both be 'master'. Please choose a different source branch.")
+            }
 
-                    def jsonPayload = """{
-                        "title": "${prInputs['PR_TITLE']}",
-                        "head": "${prInputs['SOURCE_BRANCH']}",
-                        "base": "master",
-                        "body": "${prInputs['PR_BODY']}"
-                    }"""
+            def jsonPayload = """{
+                "title": "${prInputs['PR_TITLE']}",
+                "head": "${prInputs['SOURCE_BRANCH']}",
+                "base": "master",
+                "body": "${prInputs['PR_BODY']}"
+            }"""
 
-                    writeFile file: 'pr_payload.json', text: jsonPayload
+            writeFile file: 'pr_payload.json', text: jsonPayload
 
-                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                            curl -X POST \
-                                -H "Authorization: token $GITHUB_TOKEN" \
-                                -H "Accept: application/vnd.github.v3+json" \
-                                -d @pr_payload.json \
-                                $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
-                        '''
-                    }
-                }
+            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                sh '''
+                    curl -X POST \
+                        -H "Authorization: token $GITHUB_TOKEN" \
+                        -H "Accept: application/vnd.github.v3+json" \
+                        -d @pr_payload.json \
+                        $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                '''
             }
         }
     }
+}
+
 
     post {
         success {
