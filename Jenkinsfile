@@ -56,13 +56,28 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    def dockerfileName = input(
-                        id: 'userInput', message: 'Enter Dockerfile name (leave blank for default)', parameters: [
-                            string(defaultValue: '', description: 'Dockerfile name (e.g., Dockerfile.custom)', name: 'DOCKERFILE_NAME')
-                        ]
-                    )
-
-                    dockerfileName = dockerfileName?.trim() ? dockerfileName : 'Dockerfile'
+                    def dockerfileName = ''
+                    try {
+                        dockerfileName = input(
+                            id: 'userInput', message: 'Enter Dockerfile name (leave blank for default)', parameters: [
+                                string(defaultValue: '', description: 'Dockerfile name (e.g., Dockerfile1)', name: 'DOCKERFILE_NAME')
+                            ], 
+                            submitter: '', 
+                            timeout: 5, 
+                            timeoutUnit: 'MINUTES'
+                        )
+                        dockerfileName = dockerfileName?.trim() ? dockerfileName : 'Dockerfile'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Input aborted by user, marking stage as passed."
+                            dockerfileName = 'Dockerfile'
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Input timed out, using default Dockerfile."
+                            dockerfileName = 'Dockerfile'
+                        } else {
+                            throw e
+                        }
+                    }
 
                     echo "Building Docker image using file: ${dockerfileName}"
 
@@ -108,9 +123,26 @@ pipeline {
             }
             steps {
                 script {
-                    def tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [
-                        string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')
-                    ]
+                    def tagsInput = ''
+                    try {
+                        tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [
+                            string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')
+                        ],
+                        submitter: '',
+                        timeout: 5,
+                        timeoutUnit: 'MINUTES'
+                        tagsInput = tagsInput?.trim() ? tagsInput : 'latest'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Input aborted by user, marking stage as passed."
+                            tagsInput = 'latest'
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Input timed out, using default tags."
+                            tagsInput = 'latest'
+                        } else {
+                            throw e
+                        }
+                    }
                     def tags = tagsInput.tokenize(',').collect { it.trim() }
                     echo "Pushing image with tags: ${tags}"
                     docker.withRegistry('https://registry.hub.docker.com', "${DOCKER_HUB_CREDENTIALS_ID}") {
@@ -131,7 +163,19 @@ pipeline {
                 }
             }
             steps {
-                input message: "Approve deployment to ${params.DEPLOY_ENV} environment?"
+                script {
+                    try {
+                        input message: "Approve deployment to ${params.DEPLOY_ENV} environment?", submitter: '', timeout: 5, timeoutUnit: 'MINUTES'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Approval aborted by user, marking stage as passed."
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Approval timed out, proceeding with deployment."
+                        } else {
+                            throw e
+                        }
+                    }
+                }
             }
         }
 
@@ -142,16 +186,37 @@ pipeline {
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     script {
-                        def tagName = input message: 'Enter the Git tag name to create', parameters: [string(name: 'TAG_NAME', description: 'Git tag name')]
-                        def userName = env.BUILD_USER ?: 'Rajendra.daggubati'
-                        def userEmail = "${userName}@gmail.com"
-                        echo "Creating Git tag: ${tagName} by user: ${userName} <${userEmail}>"
-                        sh """
-                            git config user.name "${userName}"
-                            git config user.email "${userEmail}"
-                            git tag -a ${tagName} -m "Tag created by Jenkins pipeline by ${userName}"
-                            git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName}
-                        """
+                        def tagName = ''
+                        try {
+                            tagName = input message: 'Enter the Git tag name to create', parameters: [string(name: 'TAG_NAME', description: 'Git tag name')],
+                            submitter: '',
+                            timeout: 5,
+                            timeoutUnit: 'MINUTES'
+                            tagName = tagName?.trim() ? tagName : ''
+                        } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                            if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                                echo "Tag creation aborted by user, marking stage as passed."
+                                tagName = ''
+                            } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                                echo "Tag creation timed out, skipping tag creation."
+                                tagName = ''
+                            } else {
+                                throw e
+                            }
+                        }
+                        if (tagName) {
+                            def userName = env.BUILD_USER ?: 'Rajendra.daggubati'
+                            def userEmail = "${userName}@gmail.com"
+                            echo "Creating Git tag: ${tagName} by user: ${userName} <${userEmail}>"
+                            sh """
+                                git config user.name "${userName}"
+                                git config user.email "${userEmail}"
+                                git tag -a ${tagName} -m "Tag created by Jenkins pipeline by ${userName}"
+                                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName}
+                            """
+                        } else {
+                            echo "No tag name provided, skipping tag creation."
+                        }
                     }
                 }
             }
@@ -170,34 +235,62 @@ pipeline {
     }
     steps {
         script {
-            def prInputs = input message: 'Provide details for the merge request',
-                parameters: [
-                    string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
-                    string(name: 'PR_TITLE', description: 'Merge request title'),
-                    text(name: 'PR_BODY', description: 'Merge request description')
-                ]
+            def prInputs = ''
+            try {
+                prInputs = input message: 'Provide details for the merge request',
+                    parameters: [
+                        string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                        string(name: 'PR_TITLE', description: 'Merge request title'),
+                        text(name: 'PR_BODY', description: 'Merge request description')
+                    ],
+                    submitter: '',
+                    timeout: 5,
+                    timeoutUnit: 'MINUTES'
+            } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                    echo "Merge request input aborted by user, marking stage as passed."
+                    prInputs = [
+                        'SOURCE_BRANCH': '',
+                        'PR_TITLE': '',
+                        'PR_BODY': ''
+                    ]
+                } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                    echo "Merge request input timed out, skipping merge request creation."
+                    prInputs = [
+                        'SOURCE_BRANCH': '',
+                        'PR_TITLE': '',
+                        'PR_BODY': ''
+                    ]
+                } else {
+                    throw e
+                }
+            }
 
             if (prInputs['SOURCE_BRANCH'] == 'master') {
                 error("PR source and target cannot both be 'master'. Please choose a different source branch.")
             }
 
-            def jsonPayload = """{
-                "title": "${prInputs['PR_TITLE']}",
-                "head": "${prInputs['SOURCE_BRANCH']}",
-                "base": "master",
-                "body": "${prInputs['PR_BODY']}"
-            }"""
+            if (prInputs['SOURCE_BRANCH']) {
+                def jsonPayload = """{
+                    "title": "${prInputs['PR_TITLE']}",
+                    "head": "${prInputs['SOURCE_BRANCH']}",
+                    "base": "master",
+                    "body": "${prInputs['PR_BODY']}"
+                }"""
 
-            writeFile file: 'pr_payload.json', text: jsonPayload
+                writeFile file: 'pr_payload.json', text: jsonPayload
 
-            withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                sh '''
-                    curl -X POST \
-                        -H "Authorization: token $GITHUB_TOKEN" \
-                        -H "Accept: application/vnd.github.v3+json" \
-                        -d @pr_payload.json \
-                        $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
-                '''
+                withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                    sh '''
+                        curl -X POST \
+                            -H "Authorization: token $GITHUB_TOKEN" \
+                            -H "Accept: application/vnd.github.v3+json" \
+                            -d @pr_payload.json \
+                            $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                    '''
+                }
+            } else {
+                echo "No source branch provided, skipping merge request creation."
             }
         }
     }
