@@ -80,7 +80,6 @@ pipeline {
                     }
 
                     echo "Building Docker image using file: ${dockerfileName}"
-
                     dockerImage = docker.build("${params.DOCKER_HUB_REPO}:latest", "-f ${dockerfileName} .")
                 }
             }
@@ -91,11 +90,9 @@ pipeline {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     script {
                         sh 'mkdir -p artifacts/trivy'
-
                         sh '''
                             curl -sSfL -o artifacts/trivy/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
                         '''
-
                         sh """
                             trivy image --scanners vuln \
                                 --severity HIGH,CRITICAL \
@@ -180,7 +177,7 @@ pipeline {
         }
 
         stage('Create Git Tag') {
-           when {
+            when {
                 branch 'master'
             }
             steps {
@@ -221,80 +218,82 @@ pipeline {
                 }
             }
         }
+
         stage('Create Merge Request') {
-    when {
-        allOf {
-            not {
-                branch 'master'
+            when {
+                allOf {
+                    not {
+                        branch 'master'
+                    }
+                    expression {
+                        return !env.CHANGE_ID
+                    }
+                }
             }
-            expression {
-                // Only run if this is not a PR-triggered build
-                return !env.CHANGE_ID
+            steps {
+                script {
+                    def prInputs = ''
+                    try {
+                        prInputs = input message: 'Provide details for the merge request',
+                            parameters: [
+                                string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                                string(name: 'PR_TITLE', description: 'Merge request title'),
+                                text(name: 'PR_BODY', description: 'Merge request description')
+                            ],
+                            submitter: '',
+                            timeout: 5,
+                            timeoutUnit: 'MINUTES'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Merge request input aborted by user, marking stage as passed."
+                            prInputs = [
+                                'SOURCE_BRANCH': '',
+                                'PR_TITLE': '',
+                                'PR_BODY': ''
+                            ]
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Merge request input timed out, skipping merge request creation."
+                            prInputs = [
+                                'SOURCE_BRANCH': '',
+                                'PR_TITLE': '',
+                                'PR_BODY': ''
+                            ]
+                        } else {
+                            throw e
+                        }
+                    }
+
+                    if (prInputs['SOURCE_BRANCH'] == 'master') {
+                        error("PR source and target cannot both be 'master'. Please choose a different source branch.")
+                    }
+
+                    if (prInputs['SOURCE_BRANCH']) {
+                        def jsonPayload = """{
+                            "title": "${prInputs['PR_TITLE']}",
+                            "head": "${prInputs['SOURCE_BRANCH']}",
+                            "base": "master",
+                            "body": "${prInputs['PR_BODY']}"
+                        }"""
+
+                        writeFile file: 'pr_payload.json', text: jsonPayload
+
+                        withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                            sh '''
+                                curl -X POST \
+                                    -H "Authorization: token $GITHUB_TOKEN" \
+                                    -H "Accept: application/vnd.github.v3+json" \
+                                    -d @pr_payload.json \
+                                    $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                            '''
+                        }
+                    } else {
+                        echo "No source branch provided, skipping merge request creation."
+                    }
+                }
             }
         }
     }
-    steps {
-        script {
-            def prInputs = ''
-            try {
-                prInputs = input message: 'Provide details for the merge request',
-                    parameters: [
-                        string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
-                        string(name: 'PR_TITLE', description: 'Merge request title'),
-                        text(name: 'PR_BODY', description: 'Merge request description')
-                    ],
-                    submitter: '',
-                    timeout: 5,
-                    timeoutUnit: 'MINUTES'
-            } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
-                if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
-                    echo "Merge request input aborted by user, marking stage as passed."
-                    prInputs = [
-                        'SOURCE_BRANCH': '',
-                        'PR_TITLE': '',
-                        'PR_BODY': ''
-                    ]
-                } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
-                    echo "Merge request input timed out, skipping merge request creation."
-                    prInputs = [
-                        'SOURCE_BRANCH': '',
-                        'PR_TITLE': '',
-                        'PR_BODY': ''
-                    ]
-                } else {
-                    throw e
-                }
-            }
 
-            if (prInputs['SOURCE_BRANCH'] == 'master') {
-                error("PR source and target cannot both be 'master'. Please choose a different source branch.")
-            }
-
-            if (prInputs['SOURCE_BRANCH']) {
-                def jsonPayload = """{
-                    "title": "${prInputs['PR_TITLE']}",
-                    "head": "${prInputs['SOURCE_BRANCH']}",
-                    "base": "master",
-                    "body": "${prInputs['PR_BODY']}"
-                }"""
-
-                writeFile file: 'pr_payload.json', text: jsonPayload
-
-                withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                    sh '''
-                        curl -X POST \
-                            -H "Authorization: token $GITHUB_TOKEN" \
-                            -H "Accept: application/vnd.github.v3+json" \
-                            -d @pr_payload.json \
-                            $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
-                    '''
-                }
-            } else {
-                echo "No source branch provided, skipping merge request creation."
-            }
-        }
-    }
-}
     post {
         success {
             echo 'Build & Deploy completed successfully!'
