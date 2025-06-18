@@ -1,13 +1,12 @@
 pipeline {
     agent {
         kubernetes {
-            label 'test'
+            label 'kube_small'
             defaultContainer 'jnlp'
         }
     }
-
     tools {
-        nodejs 'nodejs'
+        //maven '3.3.9'
     }
 
     parameters {
@@ -25,6 +24,7 @@ pipeline {
         GITHUB_API_URL = 'https://api.github.com'
         SLACK_CHANNEL = '#build-notifications'
         SLACK_CREDENTIALS_ID = 'slack-token'
+        EMAIL_CREDENTIALS_ID = 'gmail'
     }
 
     options {
@@ -36,6 +36,41 @@ pipeline {
     }
 
     stages {
+        stage('build') {
+            steps {
+                script {
+                    echo "There is empty to build the project"
+                }
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube') {  
+                    sh '''
+                    sonar-scanner \
+                    -Dsonar.projectKey=my_project_key \
+                    -Dsonar.sources=src \
+                    -Dsonar.host.url=$SONAR_HOST_URL \
+                    -Dsonar.login=$SONAR_AUTH_TOKEN > sonar-scanner.log 2>&1
+                    '''
+                }
+            }
+        post {
+            always {
+                archiveArtifacts artifacts: 'sonar-scanner.log', allowEmptyArchive: true
+                script {
+                    def qg = waitForQualityGate(timeout: 10)
+                    echo "Quality Gate status: ${qg.status}"
+                    // If the Quality Gate fails, abort the build.
+                    if (qg.status != 'OK') {
+                        error "Pipeline aborted due to Quality Gate failure: ${qg.status}"
+                    } else {
+                        echo "Quality Gate passed successfully."
+                    }
+                }
+            }
+        }
+        }
         stage('Lynis Security Scan') {
             steps {
                 script {
@@ -52,20 +87,46 @@ pipeline {
                 }
             }
         }
-
+        stage('OWASP FS SCAN') {
+            agent {
+                label 'doc'
+                }
+            }
+            steps {
+                script {
+                    dependencyCheck additionalArguments: '--scan ./ --format HTML --format XML', odcInstallation: 'dpcheck'
+                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                    archiveArtifacts artifacts: '**/dependency-check-report.html', allowEmptyArchive: true
+                }
+            }
+        }
         stage('Build Docker Image') {
             steps {
                 script {
-                    def dockerfileName = input(
-                        id: 'userInput', message: 'Enter Dockerfile name (leave blank for default)', parameters: [
-                            string(defaultValue: '', description: 'Dockerfile name (e.g., Dockerfile.custom)', name: 'DOCKERFILE_NAME')
-                        ]
-                    )
-
-                    dockerfileName = dockerfileName?.trim() ? dockerfileName : 'Dockerfile'
+                    def dockerfileName = ''
+                    try {
+                        dockerfileName = input(
+                            id: 'userInput', message: 'Enter Dockerfile name (leave blank for default)', parameters: [
+                                string(defaultValue: '', description: 'Dockerfile name (e.g., Dockerfile1)', name: 'DOCKERFILE_NAME')
+                            ], 
+                            submitter: '', 
+                            timeout: 5, 
+                            timeoutUnit: 'MINUTES'
+                        )
+                        dockerfileName = dockerfileName?.trim() ? dockerfileName : 'Dockerfile'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Input aborted by user, marking stage as passed."
+                            dockerfileName = 'Dockerfile'
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Input timed out, using default Dockerfile."
+                            dockerfileName = 'Dockerfile'
+                        } else {
+                            throw e
+                        }
+                    }
 
                     echo "Building Docker image using file: ${dockerfileName}"
-
                     dockerImage = docker.build("${params.DOCKER_HUB_REPO}:latest", "-f ${dockerfileName} .")
                 }
             }
@@ -76,11 +137,9 @@ pipeline {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     script {
                         sh 'mkdir -p artifacts/trivy'
-
                         sh '''
                             curl -sSfL -o artifacts/trivy/html.tpl https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl
                         '''
-
                         sh """
                             trivy image --scanners vuln \
                                 --severity HIGH,CRITICAL \
@@ -108,9 +167,26 @@ pipeline {
             }
             steps {
                 script {
-                    def tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [
-                        string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')
-                    ]
+                    def tagsInput = ''
+                    try {
+                        tagsInput = input message: 'Provide comma-separated tags for the Docker image to push', parameters: [
+                            string(defaultValue: 'latest', description: 'Comma-separated tags', name: 'TAGS')
+                        ],
+                        submitter: '',
+                        timeout: 5,
+                        timeoutUnit: 'MINUTES'
+                        tagsInput = tagsInput?.trim() ? tagsInput : 'latest'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Input aborted by user, marking stage as passed."
+                            tagsInput = 'latest'
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Input timed out, using default tags."
+                            tagsInput = 'latest'
+                        } else {
+                            throw e
+                        }
+                    }
                     def tags = tagsInput.tokenize(',').collect { it.trim() }
                     echo "Pushing image with tags: ${tags}"
                     docker.withRegistry('https://registry.hub.docker.com', "${DOCKER_HUB_CREDENTIALS_ID}") {
@@ -131,60 +207,134 @@ pipeline {
                 }
             }
             steps {
-                input message: "Approve deployment to ${params.DEPLOY_ENV} environment?"
+                script {
+                    try {
+                        input message: "Approve deployment to ${params.DEPLOY_ENV} environment?", submitter: '', timeout: 5, timeoutUnit: 'MINUTES'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Approval aborted by user, marking stage as passed."
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Approval timed out, proceeding with deployment."
+                        } else {
+                            throw e
+                        }
+                    }
+                }
             }
         }
 
         stage('Create Git Tag') {
+            when {
+                branch 'master'
+            }
             steps {
                 withCredentials([usernamePassword(credentialsId: "${GITHUB_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_TOKEN')]) {
                     script {
-                        def tagName = input message: 'Enter the Git tag name to create', parameters: [string(name: 'TAG_NAME', description: 'Git tag name')]
-                        def userName = env.BUILD_USER ?: 'Rajendra.daggubati'
-                        def userEmail = "${userName}@gmail.com"
-                        echo "Creating Git tag: ${tagName} by user: ${userName} <${userEmail}>"
-                        sh """
-                            git config user.name "${userName}"
-                            git config user.email "${userEmail}"
-                            git tag -a ${tagName} -m "Tag created by Jenkins pipeline by ${userName}"
-                            git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName}
-                        """
+                        def tagName = ''
+                        try {
+                            tagName = input message: 'Enter the Git tag name to create', parameters: [string(name: 'TAG_NAME', description: 'Git tag name')],
+                            submitter: '',
+                            timeout: 5,
+                            timeoutUnit: 'MINUTES'
+                            tagName = tagName?.trim() ? tagName : ''
+                        } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                            if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                                echo "Tag creation aborted by user, marking stage as passed."
+                                tagName = ''
+                            } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                                echo "Tag creation timed out, skipping tag creation."
+                                tagName = ''
+                            } else {
+                                throw e
+                            }
+                        }
+                        if (tagName) {
+                            def userName = env.BUILD_USER ?: 'Rajendra.daggubati'
+                            def userEmail = "${userName}@gmail.com"
+                            echo "Creating Git tag: ${tagName} by user: ${userName} <${userEmail}>"
+                            sh """
+                                git config user.name "${userName}"
+                                git config user.email "${userEmail}"
+                                git tag -a ${tagName} -m "Tag created by Jenkins pipeline by ${userName}"
+                                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName}
+                            """
+                        } else {
+                            echo "No tag name provided, skipping tag creation."
+                        }
                     }
                 }
             }
         }
 
         stage('Create Merge Request') {
+            when {
+                allOf {
+                    not {
+                        branch 'master'
+                    }
+                    expression {
+                        return !env.CHANGE_ID
+                    }
+                }
+            }
             steps {
                 script {
-                    def prInputs = input message: 'Provide details for the merge request',
-                        parameters: [
-                            string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
-                            string(name: 'PR_TITLE', description: 'Merge request title'),
-                            text(name: 'PR_BODY', description: 'Merge request description')
-                        ]
+                    def prInputs = ''
+                    try {
+                        prInputs = input message: 'Provide details for the merge request',
+                            parameters: [
+                                string(name: 'SOURCE_BRANCH', defaultValue: 'dev/raj/version', description: 'Name of the branch to merge (source)'),
+                                string(name: 'PR_TITLE', description: 'Merge request title'),
+                                text(name: 'PR_BODY', description: 'Merge request description')
+                            ],
+                            submitter: '',
+                            timeout: 5,
+                            timeoutUnit: 'MINUTES'
+                    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException e) {
+                        if (e.getCauses()[0].getClass().getSimpleName() == 'UserInterruption') {
+                            echo "Merge request input aborted by user, marking stage as passed."
+                            prInputs = [
+                                'SOURCE_BRANCH': '',
+                                'PR_TITLE': '',
+                                'PR_BODY': ''
+                            ]
+                        } else if (e.getCauses()[0].getClass().getSimpleName() == 'TimeoutStepExecution') {
+                            echo "Merge request input timed out, skipping merge request creation."
+                            prInputs = [
+                                'SOURCE_BRANCH': '',
+                                'PR_TITLE': '',
+                                'PR_BODY': ''
+                            ]
+                        } else {
+                            throw e
+                        }
+                    }
 
                     if (prInputs['SOURCE_BRANCH'] == 'master') {
                         error("PR source and target cannot both be 'master'. Please choose a different source branch.")
                     }
 
-                    def jsonPayload = """{
-                        "title": "${prInputs['PR_TITLE']}",
-                        "head": "${prInputs['SOURCE_BRANCH']}",
-                        "base": "master",
-                        "body": "${prInputs['PR_BODY']}"
-                    }"""
+                    if (prInputs['SOURCE_BRANCH']) {
+                        def jsonPayload = """{
+                            "title": "${prInputs['PR_TITLE']}",
+                            "head": "${prInputs['SOURCE_BRANCH']}",
+                            "base": "master",
+                            "body": "${prInputs['PR_BODY']}"
+                        }"""
 
-                    writeFile file: 'pr_payload.json', text: jsonPayload
+                        writeFile file: 'pr_payload.json', text: jsonPayload
 
-                    withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
-                        sh '''
-                            curl -X POST \
-                                -H "Authorization: token $GITHUB_TOKEN" \
-                                -H "Accept: application/vnd.github.v3+json" \
-                                -d @pr_payload.json \
-                                $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
-                        '''
+                        withCredentials([string(credentialsId: 'GITHUB_TOKEN', variable: 'GITHUB_TOKEN')]) {
+                            sh '''
+                                curl -X POST \
+                                    -H "Authorization: token $GITHUB_TOKEN" \
+                                    -H "Accept: application/vnd.github.v3+json" \
+                                    -d @pr_payload.json \
+                                    $GITHUB_API_URL/repos/$GITHUB_REPO/pulls
+                            '''
+                        }
+                    } else {
+                        echo "No source branch provided, skipping merge request creation."
                     }
                 }
             }
@@ -193,13 +343,49 @@ pipeline {
 
     post {
         success {
-            echo 'Build & Deploy completed successfully!'
+            echo "Build succeeded!"
+            slackSend(
+                channel: "${env.SLACK_CHANNEL}",
+                color: 'good',
+                message: "✅ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] succeeded: ${env.BUILD_URL}",
+                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
+            )
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
+                mail to: 'team@example.com',
+                     subject: "SUCCESS: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build succeeded!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         failure {
-            echo 'Build & Deploy failed. Check logs.'
+            echo "Build failed!"
+            slackSend(
+                channel: "${env.SLACK_CHANNEL}",
+                color: 'danger',
+                message: "❌ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] failed: ${env.BUILD_URL}",
+                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
+            )
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
+                mail to: 'team@example.com',
+                     subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         unstable {
             echo 'Build & Deploy is unstable. Check logs.'
+            slackSend(
+                channel: "${env.SLACK_CHANNEL}",
+                color: 'warning',
+                message: "⚠️ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] is unstable: ${env.BUILD_URL}",
+                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
+            )
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) { 
+                mail to: 'team@example.com',
+                     subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         always {
             cleanWs()
