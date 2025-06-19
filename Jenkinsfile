@@ -1,7 +1,7 @@
 pipeline {
     agent {
         kubernetes {
-            label 'kube_small'
+            label 'kube'
             defaultContainer 'jnlp'
         }
     }
@@ -48,11 +48,9 @@ pipeline {
                 steps {
                 withSonarQubeEnv('sonar') {
                     sh '''
-                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Broadgame \
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Docker \
                         -Dsonar.java.binaries=. \
-                        -Dsonar.projectKey=Docker \
-                        -Dsonar.login=raja \
-                        -Dsonar.password=Rajendra@1997
+                        -Dsonar.projectKey=Docker
                     '''
                 }
             }
