@@ -1,7 +1,7 @@
 pipeline {
     agent {
         kubernetes {
-            label 'kube'
+            label 'kube_small'
             defaultContainer 'jnlp'
         }
     }
@@ -50,13 +50,13 @@ pipeline {
                     sh '''
                         $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Docker \
                         -Dsonar.java.binaries=. \
-                        -Dsonar.projectKey=Docker
+                        -Dsonar.projectKey=Docker > sonar-scanner.log 2>&1
                     '''
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'sonar-scanner.log', allowEmptyArchive: true
+                    archiveArtifacts artifacts: '**/sonar-scanner.log', allowEmptyArchive: true
                     script {
                         def qg = waitForQualityGate()
                         echo "Quality Gate status: ${qg.status}"
