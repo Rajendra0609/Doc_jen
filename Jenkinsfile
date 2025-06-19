@@ -55,21 +55,21 @@ pipeline {
                     '''
                 }
             }
-        post {
-            always {
-                archiveArtifacts artifacts: 'sonar-scanner.log', allowEmptyArchive: true
-                script {
-                    def qg = waitForQualityGate(timeout: 10)
-                    echo "Quality Gate status: ${qg.status}"
-                    // If the Quality Gate fails, abort the build.
-                    if (qg.status != 'OK') {
-                        error "Pipeline aborted due to Quality Gate failure: ${qg.status}"
-                    } else {
-                        echo "Quality Gate passed successfully."
+            post {
+                always {
+                    archiveArtifacts artifacts: 'sonar-scanner.log', allowEmptyArchive: true
+                    script {
+                        def qg = waitForQualityGate(timeout: 10)
+                        echo "Quality Gate status: ${qg.status}"
+                        // If the Quality Gate fails, abort the build.
+                        if (qg.status != 'OK') {
+                            error "Pipeline aborted due to Quality Gate failure: ${qg.status}"
+                        } else {
+                            echo "Quality Gate passed successfully."
+                        }
                     }
                 }
             }
-        }
         }
         stage('Lynis Security Scan') {
             steps {
@@ -90,7 +90,6 @@ pipeline {
         stage('OWASP FS SCAN') {
             agent {
                 label 'doc'
-                }
             }
             steps {
                 script {
@@ -344,14 +343,8 @@ pipeline {
     post {
         success {
             echo "Build succeeded!"
-            slackSend(
-                channel: "${env.SLACK_CHANNEL}",
-                color: 'good',
-                message: "✅ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] succeeded: ${env.BUILD_URL}",
-                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
-            )
             withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
-                mail to: 'team@example.com',
+                mail to: 'rajendra.daggubati09@gmail.com',
                      subject: "SUCCESS: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
                      body: "Build succeeded!\n\nSee details: ${env.BUILD_URL}",
                      from: "${EMAIL_USER}"
@@ -359,14 +352,8 @@ pipeline {
         }
         failure {
             echo "Build failed!"
-            slackSend(
-                channel: "${env.SLACK_CHANNEL}",
-                color: 'danger',
-                message: "❌ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] failed: ${env.BUILD_URL}",
-                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
-            )
             withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
-                mail to: 'team@example.com',
+                mail to: 'rajendra.daggubati09@gmail.com',
                      subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
                      body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
                      from: "${EMAIL_USER}"
@@ -374,14 +361,8 @@ pipeline {
         }
         unstable {
             echo 'Build & Deploy is unstable. Check logs.'
-            slackSend(
-                channel: "${env.SLACK_CHANNEL}",
-                color: 'warning',
-                message: "⚠️ Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}] is unstable: ${env.BUILD_URL}",
-                tokenCredentialId: "${env.SLACK_CREDENTIALS_ID}"
-            )
             withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) { 
-                mail to: 'team@example.com',
+                mail to: 'rajendra.daggubati09@gmail.com',
                      subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
                      body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
                      from: "${EMAIL_USER}"
