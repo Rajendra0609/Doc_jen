@@ -254,7 +254,7 @@ pipeline {
                                 git config user.name "${userName}"
                                 git config user.email "${userEmail}"
                                 git tag -a ${tagName} -m "Tag created by Jenkins pipeline by ${userName}"
-                                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName}
+                                git push https://${GIT_USER}:${GIT_TOKEN}@github.com/${env.GITHUB_REPO}.git ${tagName} --force-with-lease
                             """
                         } else {
                             echo "No tag name provided, skipping tag creation."
