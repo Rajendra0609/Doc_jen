@@ -1,5 +1,5 @@
 pipeline {
-    gent {
+    agent {
         kubernetes {
             label 'kube'
             defaultContainer 'jnlp'
