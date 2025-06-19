@@ -16,6 +16,7 @@ pipeline {
     }
 
     environment {
+        SCANNER_HOME = tool 'sonar'
         DOCKER_HUB_CREDENTIALS_ID = 'docker'
         DEP_CHECK_PROJECT = "${env.JOB_NAME}"
         DEP_CHECK_OUT_DIR = 'reports'
@@ -44,14 +45,14 @@ pipeline {
             }
         }
         stage('SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('SonarQube') {  
+                steps {
+                withSonarQubeEnv('sonar') {
                     sh '''
-                    sonar-scanner \
-                    -Dsonar.projectKey=my_project_key \
-                    -Dsonar.sources=src \
-                    -Dsonar.host.url=$SONAR_HOST_URL \
-                    -Dsonar.login=$SONAR_AUTH_TOKEN > sonar-scanner.log 2>&1
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Broadgame \
+                        -Dsonar.java.binaries=. \
+                        -Dsonar.projectKey=Docker \
+                        -Dsonar.login=raja \
+                        -Dsonar.password=Rajendra@1997
                     '''
                 }
             }
