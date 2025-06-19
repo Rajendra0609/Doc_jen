@@ -1,5 +1,5 @@
 # Use the official Jenkins LTS image as a base
-FROM jenkins/jenkins:2.504.2
+FROM jenkins/jenkins:2.504.1
 
 # Maintainer information
 LABEL maintainer="rajendra.daggubati1997@gmail.com" \
