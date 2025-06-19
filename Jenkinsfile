@@ -58,7 +58,7 @@ pipeline {
                 always {
                     archiveArtifacts artifacts: 'sonar-scanner.log', allowEmptyArchive: true
                     script {
-                        def qg = waitForQualityGate(timeout: 10)
+                        def qg = waitForQualityGate()
                         echo "Quality Gate status: ${qg.status}"
                         // If the Quality Gate fails, abort the build.
                         if (qg.status != 'OK') {
