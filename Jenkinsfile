@@ -1,11 +1,10 @@
 pipeline {
     agent {
         kubernetes {
-            label 'test'
+            label 'kube_small'
             defaultContainer 'jnlp'
         }
     }
-
     tools {
         nodejs 'nodejs'
     }
@@ -17,6 +16,7 @@ pipeline {
     }
 
     environment {
+        SCANNER_HOME = tool 'sonar'
         DOCKER_HUB_CREDENTIALS_ID = 'docker'
         DEP_CHECK_PROJECT = "${env.JOB_NAME}"
         DEP_CHECK_OUT_DIR = 'reports'
@@ -25,6 +25,7 @@ pipeline {
         GITHUB_API_URL = 'https://api.github.com'
         SLACK_CHANNEL = '#build-notifications'
         SLACK_CREDENTIALS_ID = 'slack-token'
+        EMAIL_CREDENTIALS_ID = 'gmail'
     }
 
     options {
@@ -36,6 +37,39 @@ pipeline {
     }
 
     stages {
+        stage('build') {
+            steps {
+                script {
+                    echo "There is empty to build the project"
+                }
+            }
+        }
+        stage('SonarQube Analysis') {
+                steps {
+                withSonarQubeEnv('sonar') {
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Docker \
+                        -Dsonar.java.binaries=. \
+                        -Dsonar.projectKey=Docker > sonar-scanner.log 2>&1
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: '**/sonar-scanner.log', allowEmptyArchive: true
+                    script {
+                        def qg = waitForQualityGate()
+                        echo "Quality Gate status: ${qg.status}"
+                        // If the Quality Gate fails, abort the build.
+                        if (qg.status != 'OK') {
+                            error "Pipeline aborted due to Quality Gate failure: ${qg.status}"
+                        } else {
+                            echo "Quality Gate passed successfully."
+                        }
+                    }
+                }
+            }
+        }
         stage('Lynis Security Scan') {
             steps {
                 script {
@@ -52,7 +86,18 @@ pipeline {
                 }
             }
         }
-
+        stage('OWASP FS SCAN') {
+            agent {
+                label 'doc'
+            }
+            steps {
+                script {
+                    dependencyCheck additionalArguments: '--scan ./ --format HTML --format XML', odcInstallation: 'dpcheck'
+                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                    archiveArtifacts artifacts: '**/dependency-check-report.html', allowEmptyArchive: true
+                }
+            }
+        }
         stage('Build Docker Image') {
             steps {
                 script {
@@ -296,13 +341,31 @@ pipeline {
 
     post {
         success {
-            echo 'Build & Deploy completed successfully!'
+            echo "Build succeeded!"
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
+                mail to: 'rajendra.daggubati09@gmail.com',
+                     subject: "SUCCESS: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build succeeded!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         failure {
-            echo 'Build & Deploy failed. Check logs.'
+            echo "Build failed!"
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) {
+                mail to: 'rajendra.daggubati09@gmail.com',
+                     subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         unstable {
             echo 'Build & Deploy is unstable. Check logs.'
+            withCredentials([usernamePassword(credentialsId: "${env.EMAIL_CREDENTIALS_ID}", usernameVariable: 'EMAIL_USER', passwordVariable: 'EMAIL_PASS')]) { 
+                mail to: 'rajendra.daggubati09@gmail.com',
+                     subject: "FAILED: Job '${env.JOB_NAME}' [${env.BUILD_NUMBER}]",
+                     body: "Build failed!\n\nSee details: ${env.BUILD_URL}",
+                     from: "${EMAIL_USER}"
+            }
         }
         always {
             cleanWs()
